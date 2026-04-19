@@ -117,14 +117,12 @@ pub async fn start_swarm(
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
-        .with_quic()
         .with_dns()?
         .with_behaviour(|_| behaviour)?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
     let static_port = 4001;
-    let _ = swarm.listen_on(format!("/ip4/0.0.0.0/udp/{}/quic-v1", static_port).parse()?);
     let _ = swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", static_port).parse()?);
 
     for node in BOOTSTRAP_NODES {
@@ -150,27 +148,47 @@ pub async fn start_swarm(
                         let db_clone = Arc::clone(&db);
                         let local_author_clone = local_author_id.clone();
                         let topic_to_publish = gossipsub::IdentTopic::new(current_topic.clone());
+                        let app_handle_clone = app.clone();
                         
-                        let parents = tokio::task::spawn_blocking(move || {
-                            let lock = db_clone.lock().unwrap();
+                        // Safely spawn blocking task without unwrapping the JoinError or MutexLock
+                        let parents_result = tokio::task::spawn_blocking(move || -> Result<store::DagMessage, String> {
+                            let lock = db_clone.lock().map_err(|_| "Database lock failed")?;
                             let p = lock.get_latest_leaves().unwrap_or_default();
-                            let dag_msg = store::DagMessage::new(local_author_clone, p.clone(), input);
-                            let _ = lock.save_message(&dag_msg);
-                            dag_msg
-                        }).await.unwrap();
+                            let dag_msg = store::DagMessage::new(local_author_clone, p, input);
+                            
+                            lock.save_message(&dag_msg).map_err(|e| format!("DB Write Error: {}", e))?;
+                            Ok(dag_msg)
+                        }).await;
 
-                        let payload = serde_json::to_vec(&parents).unwrap();
-                        let sync_status = match swarm.behaviour_mut().gossipsub.publish(topic_to_publish, payload) {
-                            Ok(_) => "Sent",
-                            Err(_) => "Pending Sync",
-                        };
+                        match parents_result {
+                            Ok(Ok(parents)) => {
+                                // Safely handle JSON serialization
+                                match serde_json::to_vec(&parents) {
+                                    Ok(payload) => {
+                                        let sync_status = match swarm.behaviour_mut().gossipsub.publish(topic_to_publish, payload) {
+                                            Ok(_) => "Sent",
+                                            Err(_) => "Pending Sync",
+                                        };
 
-                        let _ = app.emit("message-sent", serde_json::json!({
-                            "hash": format!("{} ({})", &parents.id[..8], sync_status),
-                            "text": parents.content,
-                            "sender": "Me",
-                            "isSelf": true
-                        }));
+                                        let _ = app.emit("message-sent", serde_json::json!({
+                                            "hash": format!("{} ({})", &parents.id[..8], sync_status),
+                                            "text": parents.content,
+                                            "sender": "Me",
+                                            "isSelf": true
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        let _ = app.emit("network-status", format!("🔴 Serialization failed: {}", e));
+                                    }
+                                }
+                            }
+                            Ok(Err(db_err)) => {
+                                let _ = app.emit("network-status", format!("🔴 {}", db_err));
+                            }
+                            Err(join_err) => {
+                                let _ = app.emit("network-status", format!("🔴 Thread panic: {}", join_err));
+                            }
+                        }
                     }
                     crate::NetworkCommand::GenerateInvite => {
                         let mut rng_bytes = [0u8; 4];
