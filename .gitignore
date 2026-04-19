@@ -8,3 +8,7 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+# Ignore Swarm Databases and Local Keys
+*.db
+*.db-journal
+*.bin
