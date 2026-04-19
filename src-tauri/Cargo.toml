@@ -25,6 +25,7 @@ futures = "0.3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22" # ADDED: For Out-of-Band Fat Invites
 pqcrypto-mlkem = "0.1.1"
 pqcrypto-traits = "0.3" 
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
