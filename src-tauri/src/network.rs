@@ -117,13 +117,17 @@ pub async fn start_swarm(
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
+        .with_quic() // ADDED: QUIC support for UDP hole-punching
         .with_dns()?
         .with_behaviour(|_| behaviour)?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
     let static_port = 4001;
+    // Listen on TCP
     let _ = swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", static_port).parse()?);
+    // Listen on UDP for QUIC
+    let _ = swarm.listen_on(format!("/ip4/0.0.0.0/udp/{}/quic-v1", static_port).parse()?);
 
     for node in BOOTSTRAP_NODES {
         if let Ok(addr) = node.parse::<Multiaddr>() {
@@ -239,6 +243,22 @@ pub async fn start_swarm(
                         let _ = swarm.behaviour_mut().kademlia.start_providing(rendezvous_key.clone().into());
                         is_providing = true;
                     }
+
+                    // UPDATED: Check for custom protocol support before sending the Kex request
+                    if info.protocols.contains(&kex::KEX_PROTOCOL_NAME) {
+                        let mut payload_to_sign = my_crypto_id.x25519_public.to_bytes().to_vec();
+                        payload_to_sign.extend_from_slice(my_crypto_id.mlkem_public.as_bytes());
+                        let signature = local_key.sign(&payload_to_sign).unwrap();
+
+                        swarm.behaviour_mut().kex.send_request(
+                            &peer_id,
+                            kex::KexRequest {
+                                x25519_pub: my_crypto_id.x25519_public.to_bytes().to_vec(),
+                                mlkem_pub: my_crypto_id.mlkem_public.as_bytes().to_vec(),
+                                signature,
+                            }
+                        );
+                    }
                 }
 
                 SwarmEvent::Behaviour(SwarmProtocolEvent::Kademlia(kad::Event::OutboundQueryProgressed { 
@@ -264,19 +284,7 @@ pub async fn start_swarm(
                         }
                     }
                     swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-
-                    let mut payload_to_sign = my_crypto_id.x25519_public.to_bytes().to_vec();
-                    payload_to_sign.extend_from_slice(my_crypto_id.mlkem_public.as_bytes());
-                    let signature = local_key.sign(&payload_to_sign).unwrap();
-
-                    swarm.behaviour_mut().kex.send_request(
-                        &peer_id,
-                        kex::KexRequest {
-                            x25519_pub: my_crypto_id.x25519_public.to_bytes().to_vec(),
-                            mlkem_pub: my_crypto_id.mlkem_public.as_bytes().to_vec(),
-                            signature,
-                        }
-                    );
+                    // UPDATED: Kex request initiation removed from here to prevent multiplexer clogging
                 }
 
                 SwarmEvent::Behaviour(SwarmProtocolEvent::Kex(request_response::Event::Message { peer, message })) => match message {
