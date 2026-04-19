@@ -1,0 +1,36 @@
+[package]
+name = "project-swarm-gui"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "project_swarm_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- PROJECT SWARM CORE ENGINE ---
+tokio = { version = "1.32", features = ["full", "sync"] }
+libp2p = { version = "0.53", features = ["tokio", "quic", "tcp", "noise", "yamux", "kad", "mdns", "macros", "gossipsub", "request-response", "cbor", "identify", "autonat", "dcutr", "relay", "upnp", "dns", "rsa"] }
+futures = "0.3"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+hex = "0.4"
+pqcrypto-mlkem = "0.1.1"
+pqcrypto-traits = "0.3" 
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[patch.crates-io]
+core2 = { git = "https://github.com/technocreatives/core2" }
