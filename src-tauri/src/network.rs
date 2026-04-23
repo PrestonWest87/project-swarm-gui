@@ -21,9 +21,12 @@ const BOOTSTRAP_NODES: &[&str] = &[
     "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 ];
 
-// Struct for Base64 encoded invites
-#[derive(serde::Serialize, serde::Deserialize)]
+// Struct for Base64 encoded invites (now signed and verified)
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct FatInvite {
+    sender_x25519_pub: Vec<u8>,
+    sender_mlkem_pub: Vec<u8>,
+    signature: Vec<u8>,
     addrs: Vec<String>,
     topic: String,
 }
@@ -47,8 +50,8 @@ pub async fn start_swarm(
     app: tauri::AppHandle,
     mut rx: tokio::sync::mpsc::Receiver<crate::NetworkCommand>,
 ) -> Result<(), Box<dyn Error>> {
-    let db = Arc::new(Mutex::new(store::Store::new().expect("Failed to init SQLite")));
     let my_crypto_id = crypto::HybridIdentity::generate();
+    let db = Arc::new(Mutex::new(store::Store::new(my_crypto_id.derive_storage_key()).expect("Failed to init SQLite")));
 
     let key_path = "swarm_network_key.bin";
     let local_key = match std::fs::read(key_path) {
@@ -270,7 +273,6 @@ pub async fn start_swarm(
                         let room_key = kad::RecordKey::new(&current_topic);
                         let _ = swarm.behaviour_mut().kademlia.start_providing(room_key.into());
                         
-                        // [NEW] Harvest addresses for the Fat Invite
                         let mut raw_addrs = Vec::new();
                         for ext in swarm.external_addresses() {
                             raw_addrs.push(ext.to_string());
@@ -292,23 +294,53 @@ pub async fn start_swarm(
                         }
 
                         let invite_data = FatInvite {
+                            sender_x25519_pub: my_crypto_id.x25519_public.to_bytes().to_vec(),
+                            sender_mlkem_pub: my_crypto_id.mlkem_public.as_bytes().to_vec(),
+                            signature: Vec::new(),
                             addrs: final_addrs,
                             topic: current_topic.clone(),
                         };
 
                         let json = serde_json::to_string(&invite_data).unwrap();
-                        let b64_invite = URL_SAFE.encode(json);
+                        let payload_to_sign = json.as_bytes();
+                        let signature = local_key.sign(payload_to_sign).unwrap();
+
+                        let mut signed_invite = invite_data;
+                        signed_invite.signature = signature.to_vec();
+                        
+                        let json_signed = serde_json::to_string(&signed_invite).unwrap();
+                        let b64_invite = URL_SAFE.encode(json_signed);
 
                         let _ = app.emit("room-changed", current_topic.clone());
-                        
-                        // [NEW] Emit the Base64 invite to the frontend
                         let _ = app.emit("invite-generated", b64_invite.clone());
-                        let _ = app.emit("network-status", format!("🟡 Generated Fat Invite for private room."));
+                        let _ = app.emit("network-status", format!("🟡 Generated signed Fat Invite for private room."));
                     }
                     crate::NetworkCommand::JoinRoom(target_b64) => {
                         match URL_SAFE.decode(target_b64.trim()) {
                             Ok(json_bytes) => {
                                 if let Ok(invite_data) = serde_json::from_slice::<FatInvite>(&json_bytes) {
+                                    let mut invite_copy = invite_data.clone();
+                                    invite_copy.signature = Vec::new();
+                                    let payload = serde_json::to_string(&invite_copy).unwrap();
+                                    
+                                    let x_bytes: [u8; 32] = match invite_data.sender_x25519_pub.clone().try_into() {
+                                        Ok(b) => b,
+                                        Err(_) => {
+                                            let _ = app.emit("network-status", "🔴 Invalid sender key in invite.".to_string());
+                                            continue;
+                                        }
+                                    };
+                                    let sender_pub_key = libp2p::identity::PublicKey::try_decode_protobuf(&invite_data.sender_x25519_pub)
+                                        .unwrap_or_else(|_| libp2p::identity::PublicKey::Ed25519(
+                                            libp2p::identity::ed25519::PublicKey::from_slice(&x_bytes)
+                                        ));
+                                    
+                                    let sig_bytes: &[u8] = &invite_data.signature;
+                                    if sig_bytes.len() != 64 || !sender_pub_key.verify(payload.as_bytes(), sig_bytes) {
+                                        let _ = app.emit("network-status", "🔴 Invalid invite signature. Cannot verify sender identity.".to_string());
+                                        continue;
+                                    }
+                                    
                                     let _ = app.emit("network-status", format!("Joining room: '{}'", invite_data.topic));
                                     
                                     let old_topic = gossipsub::IdentTopic::new(current_topic.clone());
@@ -321,7 +353,6 @@ pub async fn start_swarm(
                                     let room_key = kad::RecordKey::new(&current_topic);
                                     let _ = swarm.behaviour_mut().kademlia.start_providing(room_key.clone().into());
                                     
-                                    // Dial addresses directly from the fat invite
                                     for addr_str in invite_data.addrs {
                                         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
                                             let _ = swarm.dial(addr);
