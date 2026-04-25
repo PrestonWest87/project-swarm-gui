@@ -26,6 +26,7 @@ const BOOTSTRAP_NODES: &[&str] = &[
 struct FatInvite {
     sender_x25519_pub: Vec<u8>,
     sender_mlkem_pub: Vec<u8>,
+    sender_ed25519_pub: Vec<u8>,
     signature: Vec<u8>,
     addrs: Vec<String>,
     topic: String,
@@ -296,6 +297,7 @@ pub async fn start_swarm(
                         let invite_data = FatInvite {
                             sender_x25519_pub: my_crypto_id.x25519_public.to_bytes().to_vec(),
                             sender_mlkem_pub: my_crypto_id.mlkem_public.as_bytes().to_vec(),
+                            sender_ed25519_pub: local_key.public().to_protobuf_encoding().to_vec(),
                             signature: Vec::new(),
                             addrs: final_addrs,
                             topic: current_topic.clone(),
@@ -323,17 +325,8 @@ pub async fn start_swarm(
                                     invite_copy.signature = Vec::new();
                                     let payload = serde_json::to_string(&invite_copy).unwrap();
                                     
-                                    let x_bytes: [u8; 32] = match invite_data.sender_x25519_pub.clone().try_into() {
-                                        Ok(b) => b,
-                                        Err(_) => {
-                                            let _ = app.emit("network-status", "🔴 Invalid sender key in invite.".to_string());
-                                            continue;
-                                        }
-                                    };
-                                    let sender_pub_key = libp2p::identity::PublicKey::try_decode_protobuf(&invite_data.sender_x25519_pub)
-                                        .unwrap_or_else(|_| libp2p::identity::PublicKey::Ed25519(
-                                            libp2p::identity::ed25519::PublicKey::try_from_bytes(&x_bytes).expect("Invalid key bytes")
-                                        ));
+                                    let sender_pub_key = libp2p::identity::PublicKey::try_decode_protobuf(&invite_data.sender_ed25519_pub)
+                                        .expect("Invalid Ed25519 public key in invite");
                                     
                                     let sig_bytes: &[u8] = &invite_data.signature;
                                     if sig_bytes.len() != 64 || !sender_pub_key.verify(payload.as_bytes(), sig_bytes) {
