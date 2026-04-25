@@ -297,7 +297,7 @@ pub async fn start_swarm(
                         let invite_data = FatInvite {
                             sender_x25519_pub: my_crypto_id.x25519_public.to_bytes().to_vec(),
                             sender_mlkem_pub: my_crypto_id.mlkem_public.as_bytes().to_vec(),
-                            sender_ed25519_pub: local_key.public().to_protobuf_encoding().to_vec(),
+                            sender_ed25519_pub: local_key.public().encode_protobuf().to_vec(),
                             signature: Vec::new(),
                             addrs: final_addrs,
                             topic: current_topic.clone(),
