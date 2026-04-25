@@ -332,7 +332,7 @@ pub async fn start_swarm(
                                     };
                                     let sender_pub_key = libp2p::identity::PublicKey::try_decode_protobuf(&invite_data.sender_x25519_pub)
                                         .unwrap_or_else(|_| libp2p::identity::PublicKey::Ed25519(
-                                            libp2p::identity::ed25519::PublicKey::from_slice(&x_bytes)
+                                            libp2p::identity::ed25519::PublicKey::try_from_bytes(&x_bytes).expect("Invalid key bytes")
                                         ));
                                     
                                     let sig_bytes: &[u8] = &invite_data.signature;

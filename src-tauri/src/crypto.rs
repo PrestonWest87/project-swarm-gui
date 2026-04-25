@@ -1,7 +1,7 @@
 // src/crypto.rs
 use serde::{Deserialize, Serialize};
 use pqcrypto_mlkem::mlkem768;
-use pqcrypto_traits::kem::{Ciphertext, SharedSecret};
+use pqcrypto_traits::kem::{Ciphertext, SecretKey, SharedSecret};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
 use chacha20poly1305::{aead::{Aead, AeadCore, KeyInit}, ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
